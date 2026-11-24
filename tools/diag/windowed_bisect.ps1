@@ -52,6 +52,23 @@ try {
 } catch { Say 'Hardware-accelerated GPU scheduling: not readable' }
 $start = Get-Date
 
+# --- the diagnostic runtime: fefw_rt_diag.dll (if it came with this script) stands in for fefw_rt.dll while the tests run -------------------------
+# The original is kept as fefw_rt.dll.orig and put back at the end (also when the run is cut short: the next start puts it back first).
+$rt = Join-Path $PSScriptRoot 'fefw_rt.dll'
+$rtDiag = Join-Path $PSScriptRoot 'fefw_rt_diag.dll'
+$rtOrig = Join-Path $PSScriptRoot 'fefw_rt.dll.orig'
+if (Test-Path -LiteralPath $rtOrig) { Copy-Item -LiteralPath $rtOrig -Destination $rt -Force; Remove-Item -LiteralPath $rtOrig -Force }
+$swapped = $false
+if ((Test-Path -LiteralPath $rtDiag) -and (Test-Path -LiteralPath $rt)) {
+    Copy-Item -LiteralPath $rt -Destination $rtOrig -Force
+    Copy-Item -LiteralPath $rtDiag -Destination $rt -Force
+    $swapped = $true
+    Say 'Using the diagnostic runtime (fefw_rt_diag.dll).'
+} elseif (Test-Path -LiteralPath $rtDiag) {
+    Say 'fefw_rt_diag.dll is here but fefw_rt.dll was not found next to fefw.exe: the normal runtime is used (the three "fse", "capture", "images" switches do nothing).'
+}
+
+try {
 # --- cleaned copies of the settings ----------------------------------------------------------------------------------------------------
 $strip = @('pageable_memory','amd_overallocation','submit_batch','frame_gen','present_mode','igpu_compat','gpl','prewarm','split_submit_ms',
            'frames_in_flight','lean_barriers','pass_barriers','lean_draws','residency','compute_shadows','compute_async','fse_extension',
@@ -151,3 +168,11 @@ if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip
 Write-Host ''
 Write-Host ('Done. Please attach this file to the GitHub issue: ' + $zip) -ForegroundColor Green
+
+} finally {
+    if ($swapped) {
+        Copy-Item -LiteralPath $rtOrig -Destination $rt -Force
+        Remove-Item -LiteralPath $rtOrig -Force
+        Write-Host 'The original fefw_rt.dll was put back.'
+    }
+}
