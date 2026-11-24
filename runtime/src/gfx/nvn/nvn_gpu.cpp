@@ -1286,6 +1286,8 @@ std::string gpu_report() {
         tl_ok = vkGetSemaphoreCounterValue(g->dev->device(), g->timeline, &v) == VK_SUCCESS && v != UINT64_MAX;
     }
     const uint64_t comp = g->completed.load(std::memory_order_relaxed);
+    // A lost device can read the counter as 0 (AMD does) though thousands of serials completed before: never show less than what was seen done.
+    if (tl_ok && v < comp) v = comp;
     char b[400];
     size_t q = 0;
     bool got = false;

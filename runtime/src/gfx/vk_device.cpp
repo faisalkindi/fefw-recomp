@@ -995,7 +995,7 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
 #ifdef _WIN32
     // Without it the driver may take a window covering the monitor (borderless fullscreen) into exclusive mode on its own, and every
     // switch to another window or monitor then blacks the screen out while the display mode changes (vk_renderer.cpp disallows it).
-    if (x_surfcaps2 && has_dext(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME)) {
+    if (x_surfcaps2 && has_dext(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME) && config_get_bool("gfx", "fse_extension", true)) {   // false: diagnostic (#81)
         dev_exts.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
         features_.full_screen_exclusive = true;
     }

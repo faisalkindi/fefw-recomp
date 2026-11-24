@@ -605,7 +605,7 @@ struct Renderer::Impl {
             }
         }
         VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        capture_supported = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+        capture_supported = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0 && config_get_bool("gfx", "swapchain_capture", true);   // false: no TRANSFER_SRC on the swapchain images (diagnostic, #81)
         if (capture_supported) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         {   // the swapchain format goes through the same check as every image
             ImageDesc id;
@@ -626,6 +626,7 @@ struct Renderer::Impl {
         if (ext.width == 0 || ext.height == 0) { extent = {0, 0}; return false; }
 
         uint32_t images = std::max(caps.minImageCount + (active == PresentMode::Mailbox ? 1u : 0u), desc.frames_in_flight + 1);
+        if (const int64_t n = config_get_int("gfx", "swapchain_images", 0); n > 0) images = std::max<uint32_t>(caps.minImageCount, static_cast<uint32_t>(std::min<int64_t>(n, 8)));   // diagnostic (#81)
         if (caps.maxImageCount) images = std::min(images, caps.maxImageCount);
 
         VkSwapchainKHR old = swapchain;
