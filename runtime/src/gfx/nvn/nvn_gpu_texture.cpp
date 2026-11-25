@@ -756,6 +756,7 @@ struct TexCensusGauges {
 TexCensusGauges g_tex_census_gauges;
 
 constexpr uint32_t kTexRetryPresents = 300;   // a texture whose image failed for want of memory is made again after this many presents (doubling, up to 16 times)
+int residency_demote_dim();
 
 TexGpu* create_texture_gpu(Texture* t, float want_scale) {
     RtPhase ht_image(nxrt::kHpRenderImage);
@@ -951,8 +952,33 @@ TexGpu* create_texture_gpu(Texture* t, float want_scale) {
         g->base = is.base;
         g->levels = is.levels;
     }
+    uint64_t est_bytes = 0, est_native_bytes = 0;
+    {   // the census: the image's size in its format, and for an ASTC stand-in the size of the ASTC it replaces
+        const bool bc8 = chosen >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && chosen <= VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+        const bool bc4 = chosen == VK_FORMAT_BC4_UNORM_BLOCK || chosen == VK_FORMAT_BC4_SNORM_BLOCK;
+        if (is_block_format(chosen) && (g->transcoded || !g->fmt->compressed))
+            est_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, 4, 4, bc8 || bc4 ? 8 : 16);
+        else if (g->transcoded || g->promoted)   // RGBA8 for an ASTC texture BC7 cannot reproduce; RGBA16F for a promoted target
+            est_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, 1, 1, g->promoted ? 8 : 4);
+        else
+            est_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, g->fmt->block_w, g->fmt->block_h, g->fmt->bytes);
+        if (g->transcoded) est_native_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, g->fmt->block_w, g->fmt->block_h, g->fmt->bytes);
+    }
+    gfx::ImageDesc desc = make_desc(is, chosen, usage, flags);
+    // Place textures that residency can later demote in their own VMA pool (or dedicated allocation if very large),
+    // apart from render targets, buffers and textures residency never demotes, which would hold on to the blocks demotions are to empty
+    // (#114, #148). An uncompressed texture flagged as a target or image may be written by the GPU, after which it is never demoted.
+    const bool maybe_written = !is_block_format(chosen) &&
+                               (t->b.flags & (NVN_TEXTURE_FLAGS_DISPLAY | NVN_TEXTURE_FLAGS_COMPRESSIBLE | NVN_TEXTURE_FLAGS_IMAGE));
+    desc.demotable_pool = residency_on() && !g->depth && !g->sparse && !g->promoted && !maybe_written &&
+                          g->scale == 1.0f && is.type == VK_IMAGE_TYPE_2D && is.levels >= 2 &&
+                          est_bytes >= (256u << 10) &&
+                          (usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) ==
+                              (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT) &&
+                          t->mem && !t->overflow && !t->is_display && !t->vpool && t->b.samples <= 1 &&
+                          std::max(is.base.width, is.base.height) > static_cast<uint32_t>(residency_demote_dim());
     std::string why2;
-    const VkResult cr = device().create_image(make_desc(is, chosen, usage, flags), &g->img, &why2);
+    const VkResult cr = device().create_image(desc, &g->img, &why2);
     if (cr == VK_ERROR_OUT_OF_DEVICE_MEMORY || cr == VK_ERROR_OUT_OF_HOST_MEMORY) {
         // Out of memory is not the texture's fault: tex_or_null makes it again later (kTexRetryPresents). Under pressure thousands of
         // textures can fail in a row: the first few are logged, then one in 256.
@@ -967,17 +993,8 @@ TexGpu* create_texture_gpu(Texture* t, float want_scale) {
         return g;
     }
     if (cr != VK_SUCCESS) return fail("create_image: " + why2);
-    {   // the census: the image's size in its format, and for an ASTC stand-in the size of the ASTC it replaces
-        const bool bc8 = chosen >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && chosen <= VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
-        const bool bc4 = chosen == VK_FORMAT_BC4_UNORM_BLOCK || chosen == VK_FORMAT_BC4_SNORM_BLOCK;
-        if (is_block_format(chosen) && (g->transcoded || !g->fmt->compressed))
-            g->est_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, 4, 4, bc8 || bc4 ? 8 : 16);
-        else if (g->transcoded || g->promoted)   // RGBA8 for an ASTC texture BC7 cannot reproduce; RGBA16F for a promoted target
-            g->est_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, 1, 1, g->promoted ? 8 : 4);
-        else
-            g->est_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, g->fmt->block_w, g->fmt->block_h, g->fmt->bytes);
-        if (g->transcoded) g->est_native_bytes = estimate_image_bytes(is.base, s.levels, s.layers, s.samples, g->fmt->block_w, g->fmt->block_h, g->fmt->bytes);
-    }
+    g->est_bytes = est_bytes;
+    g->est_native_bytes = est_native_bytes;
     g_live_images.fetch_add(1);
     counters().textures_created.fetch_add(1);
     return g;
@@ -2080,6 +2097,7 @@ const ResidCfg& resid_cfg() {
     }();
     return c;
 }
+int residency_demote_dim() { return resid_cfg().dim; }
 
 // A whole image the CPU filled (the GPU never drew it: its texels are in the game's memory), sampled, alone on its storage, 2D, with
 // levels to give back.

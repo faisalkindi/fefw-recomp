@@ -11,6 +11,7 @@
 #include "nxrt/gfx.h"
 #include "nxrt/log.h"
 #include "test_framework.h"
+#include "video_alloc_stats.h"
 NXTEST_GROUP(gfx_device)
 
 using namespace nxrt::gfx;
@@ -308,6 +309,42 @@ NXTEST(create_and_destroy_many_images_does_not_leak) {
     const Device::MemoryStats after = dev->memory_stats();
     CHECK_EQ(after.allocations, before.allocations);
     CHECK_EQ(after.bytes, before.bytes);
+    CHECK_EQ(dev->validation_stats().errors, 0ull);
+}
+
+// ImageDesc::demotable_pool: a small image is placed in the pool, a large one gets memory of its own, and both are made (the large one
+// once asked VMA in a way it refuses: VK_ERROR_FEATURE_NOT_PRESENT, an assertion in debug builds).
+NXTEST(demotable_images_are_made_pooled_or_dedicated) {
+    auto dev = make_device();
+    REQUIRE(dev != nullptr);
+    const Device::MemoryStats before = dev->memory_stats();
+    const auto pooled = [&] {
+        VideoAllocStats s;
+        dev->alloc_stats(&s);
+        return s.demotable.allocs;
+    };
+    ImageDesc d;
+    d.format = VK_FORMAT_R8G8B8A8_UNORM;
+    d.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    d.demotable_pool = true;
+    d.name = "demotable probe";
+    d.width = d.height = 512;   // 1.3 MiB with its levels: under half a pool block on every heap
+    d.mip_levels = 10;
+    std::string why;
+    Image small_img, large_img;
+    REQUIRE(dev->create_image(d, &small_img, &why) == VK_SUCCESS);
+    CHECK(small_img.view != VK_NULL_HANDLE);
+    CHECK_EQ(pooled(), 1u);
+    d.width = d.height = 4096;   // 85 MiB: over half a pool block on every heap
+    d.mip_levels = 13;
+    CHECK_EQ(dev->create_image(d, &large_img, &why), VK_SUCCESS);
+    CHECK(large_img.view != VK_NULL_HANDLE);
+    CHECK_EQ(pooled(), 1u);
+    CHECK_EQ(dev->memory_stats().allocations, before.allocations + 2);
+    dev->destroy_image(large_img);
+    dev->destroy_image(small_img);
+    CHECK_EQ(pooled(), 0u);
+    CHECK_EQ(dev->memory_stats().allocations, before.allocations);
     CHECK_EQ(dev->validation_stats().errors, 0ull);
 }
 

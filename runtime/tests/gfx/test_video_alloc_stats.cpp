@@ -51,6 +51,17 @@ NXTEST(driver_figure_behind) {
     CHECK(nxrt::gfx::video_alloc_free_percent(nxrt::gfx::VideoAllocGroup{}) == 0);
 }
 
+NXTEST(demotable_pool_reported_when_present) {
+    VideoAllocStats s;
+    s.valid = true;
+    s.video = {2048ull << 20, 1536ull << 20, 32, 3000};
+    s.small = {64ull << 20, 48ull << 20, 4, 800};
+    s.demotable = {1024ull << 20, 768ull << 20, 16, 1500};
+    char t[512];
+    CHECK(nxrt::gfx::video_alloc_text(s, t, sizeof t) > 0);
+    CHECK(std::strstr(t, "demotable-texture pools 16 blocks / 1024 MiB, 256 MiB free"));
+}
+
 NXTEST(vma_block_sizing_for_small_and_large_heaps) {
     constexpr uint64_t kMiB = 1ull << 20;
     constexpr uint64_t kGiB = 1ull << 30;
@@ -58,13 +69,22 @@ NXTEST(vma_block_sizing_for_small_and_large_heaps) {
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(0), 0ull);
     // 4 GB discrete card (e.g. GTX 1650, 3.84 GiB heap): 32 MiB blocks
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(3935 * kMiB), 32 * kMiB);
+    CHECK_EQ(nxrt::gfx::vma_demotable_pool_block_size(3935 * kMiB), 32 * kMiB);
     // 6 GB card / Steam Deck (6.0 GiB heap): 64 MiB blocks
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(6 * kGiB), 64 * kMiB);
-    // 8+ GB card: VMA default (256 MiB)
+    CHECK_EQ(nxrt::gfx::vma_demotable_pool_block_size(6 * kGiB), 64 * kMiB);
+    // 8+ GB card: VMA default (256 MiB) for default pool, 64 MiB for demotable pool
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(8 * kGiB), 0ull);
+    CHECK_EQ(nxrt::gfx::vma_demotable_pool_block_size(8 * kGiB), 64 * kMiB);
     // The boundaries belong to the smaller size
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(4608 * kMiB), 32 * kMiB);
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(4608 * kMiB + 1), 64 * kMiB);
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(7168 * kMiB), 64 * kMiB);
     CHECK_EQ(nxrt::gfx::vma_preferred_block_size(7168 * kMiB + 1), 0ull);
+    // Dedicated allocation threshold for demotable textures (half of pool block size)
+    CHECK(!nxrt::gfx::vma_use_dedicated_for_demotable(15 * kMiB, 32 * kMiB));
+    CHECK(nxrt::gfx::vma_use_dedicated_for_demotable(16 * kMiB, 32 * kMiB));
+    CHECK(!nxrt::gfx::vma_use_dedicated_for_demotable(31 * kMiB, 64 * kMiB));
+    CHECK(nxrt::gfx::vma_use_dedicated_for_demotable(32 * kMiB, 64 * kMiB));
+    CHECK(!nxrt::gfx::vma_use_dedicated_for_demotable(16 * kMiB, 0));
 }
