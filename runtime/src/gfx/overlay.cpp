@@ -36,6 +36,7 @@
 #include "nxrt/nvn.h"
 #include "nxrt/nvn_backend.h"
 #include "nxrt/platform.h"
+#include "nxrt/rtl_text.h"
 #include "nxrt/services_api.h"
 #include "extras/framegen.h"
 #include "extras/overlay_composite.h"
@@ -578,7 +579,7 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
     {
         std::string font = config_get_str("gfx", "ui_font", "");
         const std::string lang = menu_language();
-        const bool wants_cjk = !lang.empty() || !font.empty();
+        const bool wants_cjk = (!lang.empty() && !menu_language_is_rtl(lang)) || !font.empty();
         std::string chosen;
         if (wants_cjk) {
             const auto exists = [](const std::string& p) {
@@ -615,6 +616,20 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
         else {
             if (wants_cjk) NXLOG_W(kTag, "no CJK font found ([gfx] ui_font '%s'): using the built-in default", font.c_str());
             io.Fonts->AddFontDefaultVector();   // the scalable default font: stays sharp at every UI scale (update_scale)
+        }
+        // Arabic and Hebrew: merged in from a system font, for the glyphs the font above lacks (an Arabic menu, a game's name question,
+        // a typed name). Loaded on demand like the rest, so it costs nothing until such text is drawn.
+        static const char* const kRtlFonts[] = {"C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\tahoma.ttf",
+                                                "C:\\Windows\\Fonts\\arial.ttf"};
+        for (const char* c : kRtlFonts) {
+            WIN32_FILE_ATTRIBUTE_DATA a;
+            if (!GetFileAttributesExA(c, GetFileExInfoStandard, &a)) continue;
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            if (io.Fonts->AddFontFromFileTTF(c, 0.0f, &merge)) {
+                NXLOG_I(kTag, "UI font for Arabic and Hebrew: %s", c);
+                break;
+            }
         }
     }
     menu_i18n_init();   // before anything is drawn: the keyboard can open before the F1 menu ever has
@@ -739,7 +754,7 @@ bool Overlay::Impl::kb_poll() {
     kb_id = now_id;
     if (now_id) {
         kb_req = std::move(r);
-        for (std::string* t : {&kb_req.title, &kb_req.header, &kb_req.sub, &kb_req.guide, &kb_req.ok_text}) *t = fold_punct(*t);
+        for (std::string* t : {&kb_req.title, &kb_req.header, &kb_req.sub, &kb_req.guide, &kb_req.ok_text}) *t = rtl::to_display_utf8(fold_punct(*t));
         kb_text = utf8_to_u32(kb_req.initial);
         if (kb_req.max_len && kb_text.size() > kb_req.max_len) kb_text.resize(kb_req.max_len);
         kb_caret = kb_text.size();
@@ -887,8 +902,8 @@ void Overlay::Impl::draw_keyboard(double now_s) {
                                 ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar;
     if (ImGui::Begin(title.c_str(), nullptr, wf)) {
         ImGui::PushTextWrapPos(0.f);
-        if (!kb_req.header.empty()) ImGui::TextUnformatted(kb_req.header.c_str());
-        if (!kb_req.sub.empty()) ImGui::TextDisabled("%s", kb_req.sub.c_str());
+        if (!kb_req.header.empty()) text_wrapped("%s", kb_req.header.c_str());
+        if (!kb_req.sub.empty()) text_wrapped_disabled("%s", kb_req.sub.c_str());
         ImGui::PopTextWrapPos();
 
         // the text field: drawn here, not an ImGui InputText, so the keyboard, the pad and the mouse all edit the same text and caret
@@ -908,8 +923,11 @@ void Overlay::Impl::draw_keyboard(double now_s) {
             shown.assign(kb_text.size(), '*');
             before.assign(kb_caret, '*');
         } else {
-            shown = u32_to_utf8(kb_text);
-            before = u32_to_utf8(kb_text, 0, kb_caret);
+            // right-to-left letters are joined and laid out as they read; the caret goes where its logical place is drawn
+            std::vector<size_t> caret;
+            const std::u32string disp = rtl::to_display(kb_text, {}, &caret);
+            shown = u32_to_utf8(disp);
+            before = u32_to_utf8(disp, 0, caret[kb_caret]);
         }
         const float cx = font->CalcTextSizeA(big, FLT_MAX, 0.0f, before.c_str()).x;
         const float scroll = std::max(0.f, cx - (fw - 2.f * pad) + 2.f);   // keep the caret in view
@@ -976,9 +994,9 @@ void Overlay::Impl::draw_keyboard(double now_s) {
             // where a Switch pad has them
             const bool lab = kb_by_label.load(std::memory_order_relaxed);
             ImGui::PushTextWrapPos(0.f);
-            ImGui::TextDisabled(tr("Pad: %s type, %s delete, %s space, %s shift, L/R move, + OK, - cancel"), lab ? "A" : tr("A (right)"),
+            text_wrapped_disabled(tr("Pad: %s type, %s delete, %s space, %s shift, L/R move, + OK, - cancel"), lab ? "A" : tr("A (right)"),
                                 lab ? "B" : tr("B (bottom)"), lab ? "Y" : tr("Y (left)"), lab ? "X" : tr("X (top)"));
-            ImGui::TextDisabled("%s", tr("Keyboard: type, Enter OK, Esc cancel, Ctrl+V paste"));
+            text_wrapped_disabled("%s", tr("Keyboard: type, Enter OK, Esc cancel, Ctrl+V paste"));
             ImGui::PopTextWrapPos();
         }
     }
