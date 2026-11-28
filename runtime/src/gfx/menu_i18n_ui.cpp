@@ -101,6 +101,9 @@ void draw_rtl_line(const std::u32string& line, float width) {
         ImGui::SetCursorPosX(x0 + std::max(0.f, width - w));
         ImGui::TextUnformatted(s.c_str());
     };
+    // Callers may have PushTextWrapPos(0.f) active: disable ImGui's own wrap so subpixel width rounding does not double-wrap a line
+    // we already broke and right-aligned.
+    ImGui::PushTextWrapPos(-1.f);
     std::u32string cur;
     for (size_t i = units.size(); i-- > 0;) {
         const std::u32string cand = cur.empty() ? units[i] : units[i] + U" " + cur;
@@ -112,6 +115,7 @@ void draw_rtl_line(const std::u32string& line, float width) {
         }
     }
     emit(cur);
+    ImGui::PopTextWrapPos();
 }
 
 void wrapped(bool disabled, const char* fmt, va_list ap) {
