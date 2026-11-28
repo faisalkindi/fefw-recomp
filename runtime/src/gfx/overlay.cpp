@@ -580,26 +580,28 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
         std::string font = config_get_str("gfx", "ui_font", "");
         const std::string lang = menu_language();
         const bool wants_cjk = (!lang.empty() && !menu_language_is_rtl(lang)) || !font.empty();
+        const auto exists = [](const std::string& p) {
+            WIN32_FILE_ATTRIBUTE_DATA a;
+            return p.size() < MAX_PATH && GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &a) &&
+                   !(a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        };
+        std::string exe_dir;
+        {
+            char buf[MAX_PATH];
+            if (GetModuleFileNameA(nullptr, buf, MAX_PATH) > 0) {
+                exe_dir = buf;
+                const size_t slash = exe_dir.find_last_of("\\/");
+                if (slash != std::string::npos) exe_dir.resize(slash);
+                else exe_dir.clear();
+            }
+        }
         std::string chosen;
         if (wants_cjk) {
-            const auto exists = [](const std::string& p) {
-                WIN32_FILE_ATTRIBUTE_DATA a;
-                return p.size() < MAX_PATH && GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &a) &&
-                       !(a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
-            };
             if (!font.empty() && exists(font)) chosen = font;
-            if (chosen.empty()) {
-                char buf[MAX_PATH];
-                if (GetModuleFileNameA(nullptr, buf, MAX_PATH) > 0) {
-                    std::string dir(buf);
-                    const size_t slash = dir.find_last_of("\\/");
-                    if (slash != std::string::npos) {
-                        dir.resize(slash);
-                        static const char* const kLocal[] = {"fonts\\ui.ttf", "fonts\\font.ttf"};
-                        for (const char* c : kLocal)
-                            if (exists(dir + "\\" + c)) { chosen = dir + "\\" + c; break; }
-                    }
-                }
+            if (chosen.empty() && !exe_dir.empty()) {
+                static const char* const kLocal[] = {"fonts\\ui.ttf", "fonts\\font.ttf"};
+                for (const char* c : kLocal)
+                    if (exists(exe_dir + "\\" + c)) { chosen = exe_dir + "\\" + c; break; }
             }
             if (chosen.empty()) {
                 static const char* const kSystem[] = {
@@ -617,17 +619,27 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
             if (wants_cjk) NXLOG_W(kTag, "no CJK font found ([gfx] ui_font '%s'): using the built-in default", font.c_str());
             io.Fonts->AddFontDefaultVector();   // the scalable default font: stays sharp at every UI scale (update_scale)
         }
-        // Arabic and Hebrew: merged in from a system font, for the glyphs the font above lacks (an Arabic menu, a game's name question,
-        // a typed name). Loaded on demand like the rest, so it costs nothing until such text is drawn.
-        static const char* const kRtlFonts[] = {"C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\tahoma.ttf",
-                                                "C:\\Windows\\Fonts\\arial.ttf"};
-        for (const char* c : kRtlFonts) {
-            WIN32_FILE_ATTRIBUTE_DATA a;
-            if (!GetFileAttributesExA(c, GetFileExInfoStandard, &a)) continue;
+        // Arabic and Hebrew: merged in from a system or bundled font, for the glyphs the font above lacks (an Arabic menu, a game's
+        // name question, a typed name). Loaded on demand like the rest, so it costs nothing until such text is drawn.
+        // Segoe UI is tried first on Windows. Bundled DejaVuSans.ttf comes next so Wine/Proton use a font that covers Arabic, its
+        // presentation forms, and Hebrew (Proton's arial.ttf is often Liberation Sans with no Arabic, and Wine's tahoma.ttf lacks Hebrew).
+        std::vector<std::string> rtl_fonts = {"C:\\Windows\\Fonts\\segoeui.ttf"};
+        if (!exe_dir.empty()) rtl_fonts.push_back(exe_dir + "\\fonts\\DejaVuSans.ttf");
+        rtl_fonts.insert(rtl_fonts.end(), {
+            "fonts\\DejaVuSans.ttf",
+            "assets\\fonts\\DejaVuSans.ttf",
+            "C:\\Windows\\Fonts\\tahoma.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "Z:\\usr\\share\\fonts\\TTF\\DejaVuSans.ttf",
+            "Z:\\usr\\share\\fonts\\truetype\\dejavu\\DejaVuSans.ttf",
+            "Z:\\usr\\share\\fonts\\dejavu-sans-fonts\\DejaVuSans.ttf",
+        });
+        for (const std::string& c : rtl_fonts) {
+            if (!exists(c)) continue;
             ImFontConfig merge;
             merge.MergeMode = true;
-            if (io.Fonts->AddFontFromFileTTF(c, 0.0f, &merge)) {
-                NXLOG_I(kTag, "UI font for Arabic and Hebrew: %s", c);
+            if (io.Fonts->AddFontFromFileTTF(c.c_str(), 0.0f, &merge)) {
+                NXLOG_I(kTag, "UI font for Arabic and Hebrew: %s", c.c_str());
                 break;
             }
         }

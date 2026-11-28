@@ -710,6 +710,7 @@ struct AppletState {
     bool utf8 = false;                                     // software keyboard: the config's use_utf8
     bool text_check = false;                               // software keyboard: the config's use_text_check
     std::u16string text;                                   // software keyboard: the text answered
+    std::u16string edit_text;                              // software keyboard: reading-order text before swkbd_display_order, for retries
     swkbdui::Request req;                                  // software keyboard: what the prompt shows
     bool display_order = false;                            // software keyboard: answer right-to-left text in display order
 };
@@ -754,6 +755,7 @@ void swkbd_answer(AppletState& a, bool ok) {
         swkbd_submit(a, kSwkbdResultCancel);
         return;
     }
+    a.edit_text = a.text;
     if (a.display_order) a.text = utf8_to_utf16(rtl::to_display_utf8(utf16_to_utf8(a.text)));
     NXLOG_I("am", "swkbd: answering \"%s\"%s", utf16_to_utf8(a.text).c_str(), a.text_check ? " (to the game's text check first)" : "");
     if (!a.text_check) {
@@ -864,10 +866,7 @@ void swkbd_interactive(const std::shared_ptr<AppletState>& ap) {
     NXLOG_W("am", "swkbd: the game rejected the text (text check result %u: \"%s\")", check, why.c_str());
     if (prompt_flag().load() && !nxrt::config_has("applet", "swkbd_text")) {
         if (!why.empty()) a.req.guide = why;
-        a.req.initial = utf16_to_utf8(a.text);
-        // the answer went out in display order (swkbd_display_order): the player edits it again in reading order
-        if (a.display_order && rtl::is_display_order(rtl::utf8_to_u32(a.req.initial)))
-            a.req.initial = rtl::u32_to_utf8(rtl::from_display(rtl::utf8_to_u32(a.req.initial)));
+        a.req.initial = utf16_to_utf8(a.edit_text);
         swkbd_prompt_async(ap);
     } else {
         swkbd_submit(a, kSwkbdResultCancel);

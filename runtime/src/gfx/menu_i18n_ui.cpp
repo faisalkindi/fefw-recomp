@@ -47,12 +47,12 @@ void draw_rtl_line(const std::u32string& line, float width) {
         }
         a = b + 1;
     }
-    // a left-to-right phrase wider than the line is cut between its words into pieces that fit; the units are read from the end,
-    // so the pieces go in last-first and the phrase's first words come on the upper line
+    // a left-to-right phrase wider than the line is cut between its words (or inside an oversized word such as a path) into pieces
+    // that fit; the units are read from the end, so the pieces go in last-first and the phrase's first words come on the upper line
     auto wide = [](const std::u32string& s) { return ImGui::CalcTextSize(rtl::u32_to_utf8(s).c_str()).x; };
     std::vector<std::u32string> fitted;
     for (const std::u32string& u : units) {
-        if (rtl::has_rtl(u) || wide(u) <= width) {
+        if (rtl::has_rtl(u) || width <= 0.f || wide(u) <= width) {
             fitted.push_back(u);
             continue;
         }
@@ -63,12 +63,30 @@ void draw_rtl_line(const std::u32string& line, float width) {
             size_t q = u.find(U' ', p);
             if (q == std::u32string::npos) q = u.size();
             const std::u32string word = u.substr(p, q - p);
-            const std::u32string cand = piece.empty() ? word : piece + U" " + word;
-            if (!piece.empty() && wide(cand) > width) {
-                pieces.push_back(piece);
-                piece = word;
-            } else {
-                piece = cand;
+            if (!word.empty()) {
+                const std::u32string cand = piece.empty() ? word : piece + U" " + word;
+                if (!piece.empty() && wide(cand) > width) {
+                    pieces.push_back(piece);
+                    piece.clear();
+                }
+                if (piece.empty() && wide(word) > width && word.size() > 1) {
+                    size_t pos = 0;
+                    while (pos < word.size()) {
+                        size_t end = pos + 1;
+                        size_t best_sep = 0;
+                        while (end < word.size() && wide(word.substr(pos, end - pos + 1)) <= width) {
+                            const char32_t c = word[end - 1];
+                            if (c == U'/' || c == U'\\' || c == U'-' || c == U'_') best_sep = end;
+                            ++end;
+                        }
+                        if (end < word.size() && best_sep > pos) end = best_sep;
+                        if (end == word.size()) piece = word.substr(pos);
+                        else pieces.push_back(word.substr(pos, end - pos));
+                        pos = end;
+                    }
+                } else {
+                    piece = piece.empty() ? word : piece + U" " + word;
+                }
             }
             p = q + 1;
         }
