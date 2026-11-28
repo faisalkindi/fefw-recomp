@@ -47,6 +47,35 @@ void draw_rtl_line(const std::u32string& line, float width) {
         }
         a = b + 1;
     }
+    // a left-to-right phrase wider than the line is cut between its words into pieces that fit; the units are read from the end,
+    // so the pieces go in last-first and the phrase's first words come on the upper line
+    auto wide = [](const std::u32string& s) { return ImGui::CalcTextSize(rtl::u32_to_utf8(s).c_str()).x; };
+    std::vector<std::u32string> fitted;
+    for (const std::u32string& u : units) {
+        if (rtl::has_rtl(u) || wide(u) <= width) {
+            fitted.push_back(u);
+            continue;
+        }
+        std::vector<std::u32string> pieces;
+        std::u32string piece;
+        size_t p = 0;
+        while (p <= u.size()) {
+            size_t q = u.find(U' ', p);
+            if (q == std::u32string::npos) q = u.size();
+            const std::u32string word = u.substr(p, q - p);
+            const std::u32string cand = piece.empty() ? word : piece + U" " + word;
+            if (!piece.empty() && wide(cand) > width) {
+                pieces.push_back(piece);
+                piece = word;
+            } else {
+                piece = cand;
+            }
+            p = q + 1;
+        }
+        if (!piece.empty()) pieces.push_back(piece);
+        fitted.insert(fitted.end(), pieces.rbegin(), pieces.rend());
+    }
+    units.swap(fitted);
     const float x0 = ImGui::GetCursorPosX();
     auto emit = [&](const std::u32string& l) {
         const std::string s = rtl::u32_to_utf8(l);

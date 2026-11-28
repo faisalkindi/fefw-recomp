@@ -865,6 +865,9 @@ void swkbd_interactive(const std::shared_ptr<AppletState>& ap) {
     if (prompt_flag().load() && !nxrt::config_has("applet", "swkbd_text")) {
         if (!why.empty()) a.req.guide = why;
         a.req.initial = utf16_to_utf8(a.text);
+        // the answer went out in display order (swkbd_display_order): the player edits it again in reading order
+        if (a.display_order && rtl::is_display_order(rtl::utf8_to_u32(a.req.initial)))
+            a.req.initial = rtl::u32_to_utf8(rtl::from_display(rtl::utf8_to_u32(a.req.initial)));
         swkbd_prompt_async(ap);
     } else {
         swkbd_submit(a, kSwkbdResultCancel);

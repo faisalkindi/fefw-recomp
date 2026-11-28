@@ -193,7 +193,10 @@ void load_file(const std::string& path, bool rtl) {
             }
             rtl::Options o;
             o.printf_tokens = true;
-            value = rtl::to_display_utf8(value, o);
+            // an ImGui ID after "##" ("Clear##render") is not shown: only the label before it is laid out, the ID stays as it is
+            const size_t id = value.find("##");
+            value = id == std::string::npos ? rtl::to_display_utf8(value, o)
+                                            : rtl::to_display_utf8(value.substr(0, id), o) + value.substr(id);
             if (conversions(value) != conversions(key)) {   // a guard: the layout must never reorder the arguments
                 ++dropped;
                 NXLOG_W(kTag, "dropping the translation of \"%s\": its conversions change order in display order", key.c_str());
